@@ -1,0 +1,118 @@
+{
+  "dataset": {
+    "dataset_root": "/Volumes/HP USB20FD/Smart Workplace Mask Compliance Monitor 2",
+    "output_dir": "data/mask_faces",
+    "seed": 42,
+    "splits": {
+      "train": {
+        "images": 597,
+        "crops": 2918,
+        "class_counts": {
+          "without_mask": 521,
+          "with_mask": 2313,
+          "mask_weared_incorrect": 84
+        }
+      },
+      "val": {
+        "images": 127,
+        "crops": 592,
+        "class_counts": {
+          "with_mask": 448,
+          "without_mask": 121,
+          "mask_weared_incorrect": 23
+        }
+      },
+      "test": {
+        "images": 129,
+        "crops": 562,
+        "class_counts": {
+          "with_mask": 471,
+          "without_mask": 75,
+          "mask_weared_incorrect": 16
+        }
+      }
+    },
+    "classes": [
+      "with_mask",
+      "without_mask",
+      "mask_weared_incorrect"
+    ]
+  },
+  "device": "cpu",
+  "epochs": 8,
+  "best_val_accuracy": 0.875,
+  "test_loss": 0.46043378432874577,
+  "test_accuracy": 0.8558718861209964,
+  "class_names": [
+    "mask_weared_incorrect",
+    "with_mask",
+    "without_mask"
+  ],
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.8290783842186801,
+      "train_accuracy": 0.7861549006168609,
+      "val_loss": 0.7880877932986697,
+      "val_accuracy": 0.7719594594594594,
+      "learning_rate": 0.001
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.7331654759937153,
+      "train_accuracy": 0.8015764222069911,
+      "val_loss": 0.6404841348931596,
+      "val_accuracy": 0.8361486486486487,
+      "learning_rate": 0.001
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.7067596859275028,
+      "train_accuracy": 0.8231665524331734,
+      "val_loss": 0.5658476868191281,
+      "val_accuracy": 0.8429054054054054,
+      "learning_rate": 0.001
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.6936412944296928,
+      "train_accuracy": 0.8351610692254969,
+      "val_loss": 0.61116401730357,
+      "val_accuracy": 0.8125,
+      "learning_rate": 0.001
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.6764466401401491,
+      "train_accuracy": 0.8320767649074708,
+      "val_loss": 0.4839706678648253,
+      "val_accuracy": 0.8648648648648649,
+      "learning_rate": 0.001
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.6599636043564272,
+      "train_accuracy": 0.8139136394790952,
+      "val_loss": 0.6262958363906758,
+      "val_accuracy": 0.7787162162162162,
+      "learning_rate": 0.001
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.5943539588724284,
+      "train_accuracy": 0.8300205620287868,
+      "val_loss": 0.4592538532373068,
+      "val_accuracy": 0.875,
+      "learning_rate": 0.001
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.6234198537814118,
+      "train_accuracy": 0.82145305003427,
+      "val_loss": 1.025390149773778,
+      "val_accuracy": 0.49324324324324326,
+      "learning_rate": 0.001
+    }
+  ],
+  "best_checkpoint_epoch": 7
+}

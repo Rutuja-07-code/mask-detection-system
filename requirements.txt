@@ -1,6 +1,23 @@
-torch
-torchvision
-opencv-python
-Pillow
-numpy
+# Core object detection — YOLOv8 (bundles PyTorch)
+ultralytics>=8.2.0
 
+# PyTorch (explicit, so pip resolves the right CUDA/CPU wheel)
+torch>=2.1.0
+torchvision>=0.16.0
+
+# Deep learning framework
+tensorflow>=2.13.0
+
+# Computer vision & image I/O
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# Data / plotting
+numpy>=1.24.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+pandas>=2.0.0
+
+# Compliance web dashboard
+flask>=3.0.0
+flask-cors>=4.0.0

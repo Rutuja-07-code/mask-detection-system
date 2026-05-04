@@ -1,8 +1,47 @@
+# Python
 __pycache__/
-*.pyc
-.DS_Store
-.pytest_cache/
-artifacts/
-data/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Dataset (large — keep out of git)
+data/yolo/
+data/mask_faces/
+
+# Model weights & training runs
+artifacts/yolo/
+artifacts/evaluation/
+artifacts/exploration/
+artifacts/plots/
+
+# Keep training summary JSON in git if desired
+# artifacts/*.json
+
+# Predictions output
 predictions/
 
+# Ultralytics cache
+runs/
+*.pt
+*.onnx
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store

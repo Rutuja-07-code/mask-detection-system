@@ -1,0 +1,19 @@
+{
+  "epoch": 7,
+  "class_names": [
+    "mask_weared_incorrect",
+    "with_mask",
+    "without_mask"
+  ],
+  "image_size": 128,
+  "metrics": {
+    "epoch": 7,
+    "train_loss": 0.5943539588724284,
+    "train_accuracy": 0.8300205620287868,
+    "val_loss": 0.4592538532373068,
+    "val_accuracy": 0.875,
+    "learning_rate": 0.001
+  },
+  "evaluated_test_loss_unweighted": 0.46043378432874577,
+  "evaluated_test_accuracy": 0.8558718861209964
+}

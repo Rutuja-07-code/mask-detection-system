@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import argparse
-import copy
 from collections import Counter
 from pathlib import Path
 
-import torch
-from torch import nn
-from torch.utils.data import DataLoader
-from torchvision.datasets import ImageFolder
+import tensorflow as tf
 
 from src.mask_detection.constants import DEFAULT_RAW_DATASET_ROOT
 from src.mask_detection.dataset_tools import prepare_classification_dataset
-from src.mask_detection.model import MaskClassifier
+from src.mask_detection.model import build_mask_classifier
 from src.mask_detection.runtime import (
-    build_transforms,
+    build_image_datasets,
     checkpoint_to_jsonable,
+    metadata_path_for_model,
     save_json,
     select_device,
     set_seed,
@@ -40,12 +37,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=32, help="Mini-batch size.")
     parser.add_argument("--image-size", type=int, default=128, help="Square input image size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=0,
-        help="DataLoader worker count. Keep at 0 on systems where multiprocessing is flaky.",
-    )
     parser.add_argument(
         "--output-dir",
         default="artifacts",
@@ -78,108 +69,39 @@ def ensure_dataset(args) -> dict:
     return {"output_dir": str(data_dir)}
 
 
-def build_dataloaders(args):
-    train_dataset = ImageFolder(
-        root=str(Path(args.data_dir) / "train"),
-        transform=build_transforms(args.image_size, train=True),
-    )
-    val_dataset = ImageFolder(
-        root=str(Path(args.data_dir) / "val"),
-        transform=build_transforms(args.image_size, train=False),
-    )
-    test_dataset = ImageFolder(
-        root=str(Path(args.data_dir) / "test"),
-        transform=build_transforms(args.image_size, train=False),
-    )
+def build_class_weights(data_dir: str | Path, class_names: list[str]) -> dict[int, float]:
+    train_dir = Path(data_dir) / "train"
+    counts = Counter()
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-    )
-    return train_dataset, train_loader, val_loader, test_loader
+    for class_name in class_names:
+        counts[class_name] = sum(1 for path in (train_dir / class_name).glob("*") if path.is_file())
 
-
-def build_class_weights(dataset: ImageFolder) -> torch.Tensor:
-    counts = Counter(dataset.targets)
     total = sum(counts.values())
-    num_classes = len(dataset.classes)
-    weights = []
-    for class_index in range(num_classes):
-        class_count = counts[class_index]
-        weights.append(total / (num_classes * class_count))
-    return torch.tensor(weights, dtype=torch.float32)
+    num_classes = len(class_names)
+
+    class_weights: dict[int, float] = {}
+    for class_index, class_name in enumerate(class_names):
+        class_count = counts[class_name]
+        if class_count == 0:
+            raise RuntimeError(f"Class '{class_name}' has no training images in {train_dir}")
+        class_weights[class_index] = total / (num_classes * class_count)
+    return class_weights
 
 
-def run_epoch(model, loader, criterion, optimizer, device):
-    model.train()
-    total_loss = 0.0
-    total_correct = 0
-    total_examples = 0
+class LearningRateTracker(tf.keras.callbacks.Callback):
+    """Capture the effective learning rate at the end of each epoch."""
 
-    for inputs, labels in loader:
-        inputs = inputs.to(device)
-        labels = labels.to(device)
+    def __init__(self) -> None:
+        super().__init__()
+        self.values: list[float] = []
 
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item() * inputs.size(0)
-        predictions = outputs.argmax(dim=1)
-        total_correct += (predictions == labels).sum().item()
-        total_examples += labels.size(0)
-
-    return total_loss / total_examples, total_correct / total_examples
-
-
-@torch.no_grad()
-def evaluate(model, loader, criterion, device):
-    model.eval()
-    total_loss = 0.0
-    total_correct = 0
-    total_examples = 0
-
-    for inputs, labels in loader:
-        inputs = inputs.to(device)
-        labels = labels.to(device)
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-
-        total_loss += loss.item() * inputs.size(0)
-        predictions = outputs.argmax(dim=1)
-        total_correct += (predictions == labels).sum().item()
-        total_examples += labels.size(0)
-
-    return total_loss / total_examples, total_correct / total_examples
-
-
-def save_checkpoint(path: Path, model, optimizer, epoch: int, args, class_names, metrics: dict):
-    checkpoint = {
-        "epoch": epoch,
-        "model_state_dict": copy.deepcopy(model.state_dict()),
-        "optimizer_state_dict": copy.deepcopy(optimizer.state_dict()),
-        "class_names": class_names,
-        "image_size": args.image_size,
-        "metrics": metrics,
-    }
-    torch.save(checkpoint, path)
-    return checkpoint
+    def on_epoch_end(self, epoch, logs=None) -> None:
+        learning_rate = self.model.optimizer.learning_rate
+        if isinstance(learning_rate, tf.keras.optimizers.schedules.LearningRateSchedule):
+            value = learning_rate(self.model.optimizer.iterations)
+        else:
+            value = learning_rate
+        self.values.append(float(tf.keras.backend.get_value(value)))
 
 
 def main() -> None:
@@ -187,92 +109,114 @@ def main() -> None:
     set_seed(args.seed)
     metadata = ensure_dataset(args)
 
-    device = select_device()
-    train_dataset, train_loader, val_loader, test_loader = build_dataloaders(args)
-
-    model = MaskClassifier(num_classes=len(train_dataset.classes)).to(device)
-    class_weights = build_class_weights(train_dataset).to(device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=2
-    )
-
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    history = []
-    best_val_acc = 0.0
-    best_checkpoint = None
 
+    train_dataset, val_dataset, test_dataset, class_names = build_image_datasets(
+        data_dir=args.data_dir,
+        image_size=args.image_size,
+        batch_size=args.batch_size,
+        seed=args.seed,
+    )
+
+    model = build_mask_classifier(image_size=args.image_size, num_classes=len(class_names))
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=args.lr),
+        loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+        metrics=["accuracy"],
+    )
+
+    class_weights = build_class_weights(args.data_dir, class_names)
+    best_model_path = output_dir / "best_model.keras"
+    last_model_path = output_dir / "last_model.keras"
+    learning_rate_tracker = LearningRateTracker()
+
+    callbacks: list[tf.keras.callbacks.Callback] = [
+        tf.keras.callbacks.ModelCheckpoint(
+            filepath=str(best_model_path),
+            monitor="val_accuracy",
+            mode="max",
+            save_best_only=True,
+        ),
+        tf.keras.callbacks.ModelCheckpoint(
+            filepath=str(last_model_path),
+            save_best_only=False,
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor="val_accuracy",
+            mode="max",
+            factor=0.5,
+            patience=2,
+            verbose=1,
+        ),
+        learning_rate_tracker,
+    ]
+
+    device = select_device()
     print(f"Training on device: {device}")
-    print(f"Classes: {train_dataset.classes}")
+    print(f"Classes: {class_names}")
     print(f"Prepared data directory: {args.data_dir}")
 
-    for epoch in range(1, args.epochs + 1):
-        train_loss, train_acc = run_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-        scheduler.step(val_acc)
+    history_callback = model.fit(
+        train_dataset,
+        validation_data=val_dataset,
+        epochs=args.epochs,
+        class_weight=class_weights,
+        callbacks=callbacks,
+        verbose=2,
+    )
 
-        row = {
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "train_accuracy": train_acc,
-            "val_loss": val_loss,
-            "val_accuracy": val_acc,
-            "learning_rate": optimizer.param_groups[0]["lr"],
-        }
-        history.append(row)
-        print(
-            f"Epoch {epoch:02d}/{args.epochs} | "
-            f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
-            f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+    history_rows = []
+    history = history_callback.history
+    epoch_count = len(history.get("loss", []))
+
+    for epoch_index in range(epoch_count):
+        history_rows.append(
+            {
+                "epoch": epoch_index + 1,
+                "train_loss": float(history["loss"][epoch_index]),
+                "train_accuracy": float(history["accuracy"][epoch_index]),
+                "val_loss": float(history["val_loss"][epoch_index]),
+                "val_accuracy": float(history["val_accuracy"][epoch_index]),
+                "learning_rate": learning_rate_tracker.values[epoch_index],
+            }
         )
 
-        last_checkpoint = save_checkpoint(
-            output_dir / "last_model.pt",
-            model,
-            optimizer,
-            epoch,
-            args,
-            train_dataset.classes,
-            row,
-        )
-        if val_acc >= best_val_acc:
-            best_val_acc = val_acc
-            best_checkpoint = save_checkpoint(
-                output_dir / "best_model.pt",
-                model,
-                optimizer,
-                epoch,
-                args,
-                train_dataset.classes,
-                row,
-            )
-
-    if best_checkpoint is None:
-        best_checkpoint = last_checkpoint
-
-    best_checkpoint = torch.load(output_dir / "best_model.pt", map_location=device)
-    best_model = MaskClassifier(num_classes=len(train_dataset.classes)).to(device)
-    best_model.load_state_dict(best_checkpoint["model_state_dict"])
-    test_loss, test_acc = evaluate(best_model, test_loader, criterion, device)
+    best_epoch = max(history_rows, key=lambda row: row["val_accuracy"])
+    best_model = tf.keras.models.load_model(best_model_path)
+    test_loss, test_acc = best_model.evaluate(test_dataset, verbose=0)
 
     summary = {
         "dataset": metadata,
-        "device": str(device),
-        "epochs": args.epochs,
-        "best_val_accuracy": best_val_acc,
-        "test_loss": test_loss,
-        "test_accuracy": test_acc,
-        "class_names": train_dataset.classes,
-        "history": history,
+        "device": device,
+        "epochs": epoch_count,
+        "best_val_accuracy": float(best_epoch["val_accuracy"]),
+        "test_loss": float(test_loss),
+        "test_accuracy": float(test_acc),
+        "class_names": class_names,
+        "history": history_rows,
     }
-    save_json(output_dir / "training_summary.json", summary)
-    save_json(output_dir / "best_model_metadata.json", checkpoint_to_jsonable(best_checkpoint))
 
-    print(f"Best validation accuracy: {best_val_acc:.4f}")
+    best_checkpoint = {
+        "model_path": str(best_model_path.resolve()),
+        "class_names": class_names,
+        "image_size": args.image_size,
+        "metrics": best_epoch,
+    }
+    last_checkpoint = {
+        "model_path": str(last_model_path.resolve()),
+        "class_names": class_names,
+        "image_size": args.image_size,
+        "metrics": history_rows[-1],
+    }
+
+    save_json(output_dir / "training_summary.json", summary)
+    save_json(metadata_path_for_model(best_model_path), checkpoint_to_jsonable(best_checkpoint))
+    save_json(metadata_path_for_model(last_model_path), checkpoint_to_jsonable(last_checkpoint))
+
+    print(f"Best validation accuracy: {best_epoch['val_accuracy']:.4f}")
     print(f"Test accuracy: {test_acc:.4f}")
-    print(f"Best checkpoint saved to: {output_dir / 'best_model.pt'}")
+    print(f"Best checkpoint saved to: {best_model_path}")
 
 
 if __name__ == "__main__":

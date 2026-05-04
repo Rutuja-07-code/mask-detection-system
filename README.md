@@ -1,88 +1,203 @@
-# Mask Detection System
+# Smart Workplace Mask Compliance Monitor 🛡️
 
-This project builds a face-mask detection system from the dataset at:
+A real-time workplace safety system that detects whether individuals are
+following face-mask compliance rules using **YOLOv8 object detection**,
+**PyTorch**, and **OpenCV** — and streams live results to a dark-mode web
+dashboard.
 
-`/Volumes/HP USB20FD/Smart Workplace Mask Compliance Monitor 2`
+---
 
-The training flow uses the XML bounding boxes in that dataset to crop faces, trains a 3-class PyTorch classifier, and then combines the trained classifier with OpenCV face detection for runtime inference.
+## ✨ Features
 
-The three supported classes are:
+| Feature | Detail |
+|---|---|
+| Object detection | YOLOv8 (Ultralytics) — nano / small / medium / large |
+| 3 classes | `with_mask` · `without_mask` · `mask_weared_incorrect` |
+| Evaluation | mAP@0.5, mAP@0.5:0.95, Precision, Recall, FPS |
+| Real-time | Webcam · video file · image directory |
+| Dashboard | Dark-mode HTML/JS with live gauge, timeline, alert banner |
+| Dataset format | Pascal-VOC XML → YOLO TXT (auto-converted) |
 
-- `with_mask`
-- `without_mask`
-- `mask_weared_incorrect`
+---
 
-## Project Layout
+## 📂 Project Structure
 
-- `prepare_dataset.py`: converts XML annotations into cropped `train/val/test` face images
-- `train.py`: trains the face-mask classifier and saves the best checkpoint
-- `predict.py`: runs mask detection on an image, folder, or webcam
-- `src/mask_detection/`: shared training and inference code
-
-## Requirements
-
-Install the Python dependencies:
-
-```bash
-python3 -m pip install -r requirements.txt
+```
+mask-detection-system/
+├── explore_dataset.py      # Step 1 — annotate & visualise the raw dataset
+├── prepare_dataset.py      # Step 2 — convert VOC XML → YOLO TXT labels
+├── train_yolo.py           # Step 3 — train YOLOv8 object detector
+├── evaluate.py             # Step 4 — mAP@0.5, Precision, Recall, FPS
+├── predict.py              # Step 5 — image / video / webcam inference
+├── compliance_server.py    # Step 6 — Flask server (MJPEG + JSON API)
+├── make_plots.py           # Generate training & evaluation plots
+├── dataset.yaml            # YOLO dataset config (auto-written)
+├── requirements.txt
+├── dashboard/
+│   └── index.html          # Live compliance web dashboard
+├── data/
+│   └── yolo/               # Prepared YOLO dataset (auto-created)
+├── artifacts/
+│   ├── yolo/               # YOLO training runs & best weights
+│   ├── evaluation/         # mAP results & confusion matrix
+│   ├── exploration/        # Dataset visualisation plots
+│   └── plots/              # Training curve plots
+└── src/mask_detection/     # Shared Python modules
+    ├── constants.py
+    └── dataset_tools.py
 ```
 
-## 1. Prepare the Dataset
+---
 
-This reads the XML annotations from your dataset and creates cropped face images under `data/mask_faces`.
+## 🚀 Quick Start
 
-```bash
-python3 prepare_dataset.py \
-  --dataset-root "/Volumes/HP USB20FD/Smart Workplace Mask Compliance Monitor 2" \
-  --output-dir data/mask_faces \
-  --force
-```
-
-## 2. Train the Model
-
-This trains a lightweight CNN classifier and stores the best model in `artifacts/best_model.pt`.
+### 1. Install dependencies
 
 ```bash
-python3 train.py \
-  --dataset-root "/Volumes/HP USB20FD/Smart Workplace Mask Compliance Monitor 2" \
-  --data-dir data/mask_faces \
-  --epochs 12 \
-  --batch-size 32 \
-  --image-size 128
+pip install -r requirements.txt
 ```
 
-If you want `train.py` to rebuild the cropped dataset before training, add `--force-prepare`.
+> PyTorch CPU is installed automatically with `ultralytics`. For GPU support,
+> install the matching CUDA wheel from [pytorch.org](https://pytorch.org/) first.
 
-## 3. Run Inference
-
-Run on one image:
+### 2. Explore the dataset
 
 ```bash
-python3 predict.py \
-  --checkpoint artifacts/best_model.pt \
-  --image path/to/test_image.jpg \
-  --output-dir predictions
+python explore_dataset.py
+# ➜ artifacts/exploration/sample_grid.png
+# ➜ artifacts/exploration/bbox_histogram.png
+# ➜ artifacts/exploration/class_balance.png
+# ➜ artifacts/exploration/dataset_stats.json
 ```
 
-Run on a folder of images:
+### 3. Prepare the YOLO dataset
 
 ```bash
-python3 predict.py \
-  --checkpoint artifacts/best_model.pt \
-  --input-dir path/to/images \
-  --output-dir predictions
+python prepare_dataset.py --mode yolo
+# ➜ data/yolo/{train,val,test}/{images,labels}/
+# ➜ dataset.yaml  (updated with absolute paths)
 ```
 
-Run with webcam:
+### 4. Train YOLOv8
 
 ```bash
-python3 predict.py --checkpoint artifacts/best_model.pt --webcam
+# Fast (nano backbone, ~10 min on CPU):
+python train_yolo.py --model yolov8n.pt --epochs 50
+
+# More accurate (small backbone):
+python train_yolo.py --model yolov8s.pt --epochs 100 --batch 16
+
+# ➜ artifacts/yolo/train/weights/best.pt
 ```
 
-Press `q` to close the webcam window.
+### 5. Evaluate (mAP@0.5)
 
-## Notes
+```bash
+python evaluate.py
+# ➜ Prints mAP@0.5, Precision, Recall, FPS per class
+# ➜ artifacts/evaluation/evaluation_results.json
+# ➜ artifacts/evaluation/confusion_matrix.png (etc.)
+```
 
-- The dataset contains 853 images and 4,072 labeled faces.
-- The training code automatically handles class imbalance by weighting the loss function.
-- On CPU, training may take some time. Lower `--epochs` or `--image-size` for faster experiments.
+### 6. Test on webcam / video / image
+
+```bash
+# Webcam (press Q to quit)
+python predict.py --webcam
+
+# Video file
+python predict.py --video path/to/video.mp4
+
+# Single image
+python predict.py --image path/to/image.jpg
+
+# Folder of images
+python predict.py --input-dir path/to/folder/
+```
+
+### 7. Live compliance dashboard
+
+```bash
+python compliance_server.py
+# ➜ Open http://localhost:5050/ in your browser
+```
+
+The dashboard shows:
+- 📹 Live MJPEG video feed with detection overlays
+- 🟢 **With Mask** / 🔴 **No Mask** / 🟡 **Incorrect** counters
+- 🎯 Compliance % gauge chart
+- 📈 60-second timeline chart
+- ⚠️ Alert banner when violation rate exceeds 30 %
+
+### 8. Generate training plots
+
+```bash
+python make_plots.py
+# ➜ artifacts/plots/yolo_losses.png
+# ➜ artifacts/plots/yolo_metrics.png
+# ➜ artifacts/plots/per_class_metrics.png
+```
+
+---
+
+## 📊 Evaluation Metrics
+
+| Metric | Description |
+|---|---|
+| **mAP@0.5** | Mean Average Precision at IoU = 0.5 (primary metric) |
+| **mAP@0.5:0.95** | mAP averaged over IoU thresholds 0.5→0.95 |
+| **Precision** | Of all predicted positives, how many are correct |
+| **Recall** | Of all true positives, how many were found |
+| **FPS** | Frames processed per second (inference only) |
+
+---
+
+## ⚙️ Configuration
+
+### Train with a different backbone
+
+| Flag | Options | Notes |
+|---|---|---|
+| `--model` | `yolov8n.pt` `yolov8s.pt` `yolov8m.pt` `yolov8l.pt` | n = fastest, l = most accurate |
+| `--epochs` | integer | 50 for quick test, 150+ for best results |
+| `--imgsz` | 416, 640 | 640 is default |
+| `--batch` | integer | 8–32 depending on RAM |
+| `--device` | `cpu` `0` `mps` | empty = auto-detect |
+
+### Dataset path
+
+Edit `src/mask_detection/constants.py`:
+
+```python
+DEFAULT_RAW_DATASET_ROOT = "/Volumes/HP USB20FD/Smart Workplace Mask Compliance Monitor 2"
+```
+
+---
+
+## 🗂️ Dataset Format
+
+Raw dataset expected layout:
+```
+<dataset_root>/
+  images/          ← JPEG/PNG images
+  annotations/     ← Pascal-VOC XML files (one per image)
+```
+
+Classes: `with_mask`, `without_mask`, `mask_weared_incorrect`
+
+---
+
+## 📦 Tech Stack
+
+- **[Ultralytics YOLOv8](https://docs.ultralytics.com/)** — object detection
+- **PyTorch** — deep learning backend
+- **OpenCV** — real-time frame processing
+- **Flask** — compliance server & MJPEG streaming
+- **Chart.js** — live dashboard charts
+- **matplotlib / seaborn** — training plots
+
+---
+
+## 📜 License
+
+MIT — free to use and modify for academic and commercial projects.

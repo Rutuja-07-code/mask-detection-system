@@ -7,69 +7,92 @@ import random
 from pathlib import Path
 
 import numpy as np
-import torch
+import tensorflow as tf
 from PIL import Image
-from torchvision import transforms
-
-from .model import MaskClassifier
 
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
+    tf.keras.utils.set_random_seed(seed)
 
 
-def select_device() -> torch.device:
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
+def select_device() -> str:
+    gpus = tf.config.list_physical_devices("GPU")
+    if gpus:
+        return f"GPU ({gpus[0].name})"
+    return "CPU"
 
 
-def build_transforms(image_size: int, train: bool) -> transforms.Compose:
-    if train:
-        return transforms.Compose(
-            [
-                transforms.Resize((image_size, image_size)),
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomRotation(12),
-                transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.15),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-            ]
-        )
-    return transforms.Compose(
-        [
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-        ]
+def normalize_images(images: tf.Tensor, labels: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
+    images = tf.cast(images, tf.float32) / 255.0
+    return images, labels
+
+
+def build_image_datasets(
+    data_dir: str | Path,
+    image_size: int,
+    batch_size: int,
+    seed: int,
+) -> tuple[tf.data.Dataset, tf.data.Dataset, tf.data.Dataset, list[str]]:
+    data_dir = Path(data_dir)
+    dataset_kwargs = {
+        "label_mode": "int",
+        "image_size": (image_size, image_size),
+        "batch_size": batch_size,
+    }
+
+    train_dataset = tf.keras.utils.image_dataset_from_directory(
+        data_dir / "train",
+        shuffle=True,
+        seed=seed,
+        **dataset_kwargs,
     )
+    class_names = list(train_dataset.class_names)
+
+    val_dataset = tf.keras.utils.image_dataset_from_directory(
+        data_dir / "val",
+        shuffle=False,
+        **dataset_kwargs,
+    )
+    test_dataset = tf.keras.utils.image_dataset_from_directory(
+        data_dir / "test",
+        shuffle=False,
+        **dataset_kwargs,
+    )
+
+    autotune = tf.data.AUTOTUNE
+    train_dataset = train_dataset.map(normalize_images, num_parallel_calls=autotune).prefetch(autotune)
+    val_dataset = val_dataset.map(normalize_images, num_parallel_calls=autotune).prefetch(autotune)
+    test_dataset = test_dataset.map(normalize_images, num_parallel_calls=autotune).prefetch(autotune)
+
+    return train_dataset, val_dataset, test_dataset, class_names
 
 
 def checkpoint_to_jsonable(checkpoint: dict) -> dict:
-    jsonable = dict(checkpoint)
-    jsonable.pop("model_state_dict", None)
-    jsonable.pop("optimizer_state_dict", None)
-    return jsonable
+    return dict(checkpoint)
 
 
-def load_checkpoint(checkpoint_path: str | Path, map_location: torch.device | str = "cpu"):
-    return torch.load(checkpoint_path, map_location=map_location)
+def metadata_path_for_model(model_path: str | Path) -> Path:
+    model_path = Path(model_path)
+    return model_path.with_name(f"{model_path.stem}_metadata.json")
 
 
-def build_model_from_checkpoint(checkpoint: dict) -> MaskClassifier:
-    class_names = checkpoint["class_names"]
-    model = MaskClassifier(num_classes=len(class_names))
-    model.load_state_dict(checkpoint["model_state_dict"])
-    return model
+def load_checkpoint(checkpoint_path: str | Path) -> dict:
+    checkpoint_path = Path(checkpoint_path)
+    checkpoint = json.loads(metadata_path_for_model(checkpoint_path).read_text(encoding="utf-8"))
+    checkpoint["model_path"] = str(checkpoint_path.resolve())
+    return checkpoint
 
 
-def preprocess_pil_image(image: Image.Image, image_size: int) -> torch.Tensor:
-    transform = build_transforms(image_size=image_size, train=False)
-    return transform(image.convert("RGB")).unsqueeze(0)
+def build_model_from_checkpoint(checkpoint: dict) -> tf.keras.Model:
+    return tf.keras.models.load_model(checkpoint["model_path"])
+
+
+def preprocess_pil_image(image: Image.Image, image_size: int) -> np.ndarray:
+    resized = image.convert("RGB").resize((image_size, image_size))
+    array = np.asarray(resized, dtype=np.float32) / 255.0
+    return np.expand_dims(array, axis=0)
 
 
 def save_json(path: str | Path, payload: dict) -> None:

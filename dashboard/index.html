@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Smart Workplace Mask Compliance Monitor — real-time face mask detection dashboard powered by YOLOv8." />
+  <title>Mask Compliance Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* ─────────────────────────────────────────────
+       Design tokens
+    ───────────────────────────────────────────── */
+    :root {
+      --bg:          #0d0f14;
+      --surface:     #161a23;
+      --surface2:    #1e2433;
+      --border:      #262d3f;
+      --text:        #e2e8f4;
+      --muted:       #7a8aaa;
+      --green:       #2ecc71;
+      --red:         #e74c3c;
+      --yellow:      #f1c40f;
+      --blue:        #3b82f6;
+      --blue-glow:   rgba(59,130,246,0.18);
+      --green-glow:  rgba(46,204,113,0.18);
+      --red-glow:    rgba(231,76,60,0.18);
+      --radius:      14px;
+      --font:        'Inter', system-ui, sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ─── Header ─────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 32px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(22,26,35,0.85);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo-icon {
+      width: 38px; height: 38px;
+      background: linear-gradient(135deg, var(--blue), #6366f1);
+      border-radius: 10px;
+      display: grid; place-items: center;
+      font-size: 18px;
+    }
+    .logo-text h1 { font-size: 1.05rem; font-weight: 700; letter-spacing: -.02em; }
+    .logo-text span { font-size: 0.72rem; color: var(--muted); }
+
+    .header-right { display: flex; align-items: center; gap: 14px; }
+
+    #alert-banner {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      border-radius: 999px;
+      background: rgba(231,76,60,0.15);
+      border: 1px solid var(--red);
+      color: var(--red);
+      font-size: 0.8rem;
+      font-weight: 600;
+      animation: pulse-border 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-border {
+      0%,100% { box-shadow: 0 0 0 0 rgba(231,76,60,0.4); }
+      50%      { box-shadow: 0 0 0 6px rgba(231,76,60,0); }
+    }
+
+    .status-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: blink 1.8s infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+    #reset-btn {
+      padding: 7px 18px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface2);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.78rem; font-weight: 500;
+      transition: all .2s;
+    }
+    #reset-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-glow); }
+
+    /* ─── Layout grid ────────────────────────── */
+    main {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      grid-template-rows: auto auto auto;
+      gap: 20px;
+      padding: 24px 32px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    /* ─── Cards ──────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .card-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+
+    /* ─── Video feed ─────────────────────────── */
+    .video-card {
+      grid-column: 1;
+      grid-row: 1 / 3;
+    }
+    #video-feed {
+      width: 100%;
+      border-radius: 10px;
+      background: #000;
+      display: block;
+      max-height: 480px;
+      object-fit: contain;
+    }
+    .video-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 10px;
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+    #fps-display { color: var(--blue); font-weight: 600; }
+
+    /* ─── Stat cards ─────────────────────────── */
+    .stats-col {
+      grid-column: 2;
+      grid-row: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .stat-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      transition: transform .15s, box-shadow .15s;
+    }
+    .stat-card:hover { transform: translateY(-2px); }
+
+    .stat-icon {
+      width: 44px; height: 44px;
+      border-radius: 12px;
+      display: grid; place-items: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+    .stat-icon.green { background: var(--green-glow); }
+    .stat-icon.red   { background: var(--red-glow);   }
+    .stat-icon.yellow { background: rgba(241,196,15,.13); }
+    .stat-icon.blue  { background: var(--blue-glow);  }
+
+    .stat-body { flex: 1; }
+    .stat-label { font-size: 0.72rem; color: var(--muted); margin-bottom: 2px; }
+    .stat-value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -.03em;
+      transition: color .3s;
+    }
+    .stat-value.green  { color: var(--green); }
+    .stat-value.red    { color: var(--red); }
+    .stat-value.yellow { color: var(--yellow); }
+    .stat-value.blue   { color: var(--blue); }
+
+    /* ─── Gauge ──────────────────────────────── */
+    .gauge-card {
+      grid-column: 2;
+      grid-row: 2;
+    }
+    .gauge-wrap {
+      position: relative;
+      width: 180px;
+      margin: 0 auto;
+    }
+    #gauge-label {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding-top: 28px;
+      pointer-events: none;
+    }
+    #gauge-pct {
+      font-size: 2.1rem;
+      font-weight: 700;
+      color: var(--green);
+      transition: color .4s;
+    }
+    #gauge-subtitle { font-size: 0.7rem; color: var(--muted); }
+
+    /* ─── Timeline chart ─────────────────────── */
+    .timeline-card {
+      grid-column: 1 / 3;
+      grid-row: 3;
+    }
+    .chart-container { position: relative; height: 190px; }
+
+    /* ─── Violations table ───────────────────── */
+    .violations-card {
+      grid-column: 1 / 3;
+      grid-row: 4;
+    }
+    #violations-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    #violations-table th {
+      text-align: left;
+      padding: 8px 12px;
+      color: var(--muted);
+      font-weight: 500;
+      border-bottom: 1px solid var(--border);
+    }
+    #violations-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid rgba(38,45,63,.5);
+    }
+    #violations-table tr:last-child td { border-bottom: none; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+    .badge.ok     { background: var(--green-glow); color: var(--green); }
+    .badge.warn   { background: rgba(241,196,15,.13); color: var(--yellow); }
+    .badge.danger { background: var(--red-glow); color: var(--red); }
+
+    /* ─── Responsive ─────────────────────────── */
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: 1fr;
+        padding: 16px;
+      }
+      .video-card  { grid-column: 1; grid-row: 1; }
+      .stats-col   { grid-column: 1; grid-row: 2; flex-direction: row; flex-wrap: wrap; }
+      .stat-card   { flex: 1 1 140px; }
+      .gauge-card  { grid-column: 1; grid-row: 3; }
+      .timeline-card  { grid-column: 1; grid-row: 4; }
+      .violations-card { grid-column: 1; grid-row: 5; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ───────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">🛡️</div>
+    <div class="logo-text">
+      <h1>Mask Compliance Monitor</h1>
+      <span>Smart Workplace Safety · YOLOv8 Real-Time Detection</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="alert-banner">⚠️ HIGH VIOLATION RATE</div>
+    <div class="status-dot" id="status-dot" title="Live feed active"></div>
+    <button id="reset-btn" onclick="resetSession()">↺ Reset Session</button>
+  </div>
+</header>
+
+<!-- ── Main grid ─────────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Live video -->
+  <div class="card video-card">
+    <div class="card-title">📹 Live Camera Feed</div>
+    <img id="video-feed" src="/video_feed" alt="Live mask detection feed" />
+    <div class="video-footer">
+      <span id="fps-display">— FPS</span>
+      <span id="last-updated">Connecting…</span>
+    </div>
+  </div>
+
+  <!-- Stat cards column -->
+  <div class="stats-col">
+    <div class="stat-card">
+      <div class="stat-icon green">✅</div>
+      <div class="stat-body">
+        <div class="stat-label">With Mask</div>
+        <div class="stat-value green" id="cnt-with-mask">0</div>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon red">🚫</div>
+      <div class="stat-body">
+        <div class="stat-label">No Mask</div>
+        <div class="stat-value red" id="cnt-no-mask">0</div>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon yellow">⚠️</div>
+      <div class="stat-body">
+        <div class="stat-label">Worn Incorrectly</div>
+        <div class="stat-value yellow" id="cnt-incorrect">0</div>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon blue">👥</div>
+      <div class="stat-body">
+        <div class="stat-label">Total Detected</div>
+        <div class="stat-value blue" id="cnt-total">0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Compliance gauge -->
+  <div class="card gauge-card">
+    <div class="card-title">🎯 Compliance Rate</div>
+    <div class="gauge-wrap">
+      <canvas id="gauge-canvas" width="180" height="180"></canvas>
+      <div id="gauge-label">
+        <span id="gauge-pct">100%</span>
+        <span id="gauge-subtitle">compliant</span>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:10px;font-size:0.74rem;color:var(--muted);">
+      Session peak violation: <span id="peak-viol" style="color:var(--red);font-weight:600;">0%</span>
+    </div>
+  </div>
+
+  <!-- Timeline chart -->
+  <div class="card timeline-card">
+    <div class="card-title">📈 Compliance Timeline (last 60 s)</div>
+    <div class="chart-container">
+      <canvas id="timeline-chart"></canvas>
+    </div>
+  </div>
+
+  <!-- Violations log table -->
+  <div class="card violations-card">
+    <div class="card-title">📋 Live Detection Summary</div>
+    <table id="violations-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Time</th>
+          <th>With Mask</th>
+          <th>No Mask</th>
+          <th>Incorrect</th>
+          <th>Total</th>
+          <th>Compliance</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="violations-tbody">
+        <tr><td colspan="8" style="color:var(--muted);text-align:center;padding:24px;">
+          Waiting for detections…
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</main>
+
+<script>
+  // ─── Gauge chart (doughnut half) ────────────────────────────────────────
+  const gaugeCtx   = document.getElementById('gauge-canvas').getContext('2d');
+  const gaugeChart = new Chart(gaugeCtx, {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: [100, 0, 100],           // [compliance, violation, blank half]
+        backgroundColor: ['#2ecc71', '#e74c3c', 'transparent'],
+        borderWidth: 0,
+        circumference: 180,
+        rotation: -90,
+      }]
+    },
+    options: {
+      responsive: false,
+      cutout: '72%',
+      plugins: { tooltip: { enabled: false }, legend: { display: false } },
+      animation: { duration: 500 },
+    }
+  });
+
+  function updateGauge(pct) {
+    const comp = Math.max(0, Math.min(100, pct));
+    const viol = 100 - comp;
+    gaugeChart.data.datasets[0].data = [comp, viol, 100];
+    gaugeChart.data.datasets[0].backgroundColor[0] =
+      comp >= 70 ? '#2ecc71' : comp >= 40 ? '#f1c40f' : '#e74c3c';
+    gaugeChart.update('none');
+    const pctEl = document.getElementById('gauge-pct');
+    pctEl.textContent = comp.toFixed(0) + '%';
+    pctEl.style.color =
+      comp >= 70 ? 'var(--green)' : comp >= 40 ? 'var(--yellow)' : 'var(--red)';
+  }
+
+  // ─── Timeline chart ────────────────────────────────────────────────────
+  const timelineCtx = document.getElementById('timeline-chart').getContext('2d');
+  const timelineChart = new Chart(timelineCtx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'Compliance %',
+          data: [],
+          borderColor: '#2ecc71',
+          backgroundColor: 'rgba(46,204,113,.08)',
+          fill: true,
+          tension: 0.4,
+          pointRadius: 2,
+          borderWidth: 2,
+        },
+        {
+          label: 'With Mask',
+          data: [],
+          borderColor: '#3b82f6',
+          backgroundColor: 'transparent',
+          tension: 0.4,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          borderDash: [4, 3],
+        },
+        {
+          label: 'Violations',
+          data: [],
+          borderColor: '#e74c3c',
+          backgroundColor: 'rgba(231,76,60,.07)',
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0,
+          borderWidth: 1.5,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 300 },
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: { color: '#7a8aaa', maxTicksLimit: 10, font: { size: 10 } },
+        },
+        y: {
+          min: 0, max: 100,
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          ticks: { color: '#7a8aaa', font: { size: 10 }, callback: v => v + '%' },
+        }
+      },
+      plugins: {
+        legend: {
+          labels: { color: '#7a8aaa', font: { size: 11 }, boxWidth: 12 }
+        },
+        tooltip: {
+          backgroundColor: '#1e2433',
+          borderColor: '#262d3f',
+          borderWidth: 1,
+          titleColor: '#e2e8f4',
+          bodyColor: '#7a8aaa',
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`
+          }
+        }
+      }
+    }
+  });
+
+  function updateTimeline(history) {
+    if (!history || history.length === 0) return;
+    const last = history.slice(-120);
+    const labels = last.map(h => {
+      const d = new Date(h.ts * 1000);
+      return d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    });
+    const compPct  = last.map(h => h.compliance_pct);
+    const withMask = last.map(h => {
+      const t = h.with_mask + h.without_mask + h.mask_weared_incorrect;
+      return t > 0 ? (h.with_mask / t * 100) : 100;
+    });
+    const viol = last.map(h => {
+      const t = h.with_mask + h.without_mask + h.mask_weared_incorrect;
+      return t > 0 ? ((h.without_mask + h.mask_weared_incorrect) / t * 100) : 0;
+    });
+
+    timelineChart.data.labels = labels;
+    timelineChart.data.datasets[0].data = compPct;
+    timelineChart.data.datasets[1].data = withMask;
+    timelineChart.data.datasets[2].data = viol;
+    timelineChart.update('none');
+  }
+
+  // ─── Violations log ────────────────────────────────────────────────────
+  let logRows = [];
+  let rowCounter = 0;
+
+  function appendLogRow(stat) {
+    rowCounter++;
+    const total = stat.total || 0;
+    const comp  = stat.compliance_pct ?? 100;
+    const viol  = stat.violations ?? 0;
+    const ts    = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    const status = comp >= 70
+      ? '<span class="badge ok">✓ OK</span>'
+      : comp >= 40
+        ? '<span class="badge warn">⚠ Warning</span>'
+        : '<span class="badge danger">✗ Alert</span>';
+
+    logRows.unshift({
+      n: rowCounter, ts,
+      wm: stat.counts?.with_mask ?? 0,
+      nm: stat.counts?.without_mask ?? 0,
+      inc: stat.counts?.mask_weared_incorrect ?? 0,
+      total, comp: comp.toFixed(0), status
+    });
+    if (logRows.length > 30) logRows.pop();
+
+    const tbody = document.getElementById('violations-tbody');
+    tbody.innerHTML = logRows.map(r => `
+      <tr>
+        <td style="color:var(--muted)">${r.n}</td>
+        <td style="color:var(--muted)">${r.ts}</td>
+        <td style="color:var(--green)">${r.wm}</td>
+        <td style="color:var(--red)">${r.nm}</td>
+        <td style="color:var(--yellow)">${r.inc}</td>
+        <td><strong>${r.total}</strong></td>
+        <td style="font-weight:600">${r.comp}%</td>
+        <td>${r.status}</td>
+      </tr>`).join('');
+  }
+
+  // ─── Stats polling ────────────────────────────────────────────────────
+  let lastFpsTime = Date.now();
+  let fpsCounter  = 0;
+
+  async function pollStats() {
+    try {
+      const [statRes, histRes] = await Promise.all([
+        fetch('/api/stats'),
+        fetch('/api/history'),
+      ]);
+      const stat    = await statRes.json();
+      const history = await histRes.json();
+
+      // Counts
+      document.getElementById('cnt-with-mask').textContent = stat.counts?.with_mask ?? 0;
+      document.getElementById('cnt-no-mask').textContent   = stat.counts?.without_mask ?? 0;
+      document.getElementById('cnt-incorrect').textContent = stat.counts?.mask_weared_incorrect ?? 0;
+      document.getElementById('cnt-total').textContent     = stat.total ?? 0;
+
+      // Gauge
+      updateGauge(stat.compliance_pct ?? 100);
+      document.getElementById('peak-viol').textContent =
+        (stat.session_max_violation_pct ?? 0).toFixed(1) + '%';
+
+      // Alert banner
+      const alertEl = document.getElementById('alert-banner');
+      alertEl.style.display = stat.alert ? 'flex' : 'none';
+
+      // Timeline
+      updateTimeline(history);
+
+      // Log row (every ~2 s)
+      fpsCounter++;
+      if (fpsCounter % 4 === 0) appendLogRow(stat);
+
+      // FPS (rough — poll is ~500ms)
+      const now = Date.now();
+      const elapsed = (now - lastFpsTime) / 1000;
+      if (fpsCounter % 2 === 0) {
+        document.getElementById('fps-display').textContent = (2 / elapsed).toFixed(1) + ' polls/s';
+        lastFpsTime = now;
+      }
+      document.getElementById('last-updated').textContent =
+        'Updated: ' + new Date().toLocaleTimeString();
+
+    } catch (err) {
+      document.getElementById('last-updated').textContent = 'Connection error — retrying…';
+      document.getElementById('status-dot').style.background = '#e74c3c';
+    }
+  }
+
+  async function resetSession() {
+    await fetch('/api/reset', { method: 'POST' });
+    logRows = [];
+    rowCounter = 0;
+    document.getElementById('violations-tbody').innerHTML =
+      '<tr><td colspan="8" style="color:var(--muted);text-align:center;padding:24px;">Session reset.</td></tr>';
+    timelineChart.data.labels = [];
+    timelineChart.data.datasets.forEach(d => d.data = []);
+    timelineChart.update();
+    updateGauge(100);
+  }
+
+  // Start polling immediately and every 500 ms
+  pollStats();
+  setInterval(pollStats, 500);
+</script>
+</body>
+</html>
